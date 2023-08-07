@@ -1,0 +1,61 @@
+# Clear workspace
+rm(list = ls())
+
+# Set working directory
+setwd("YOUR_DIRECTORY_PATH")
+
+# --- LOAD DATA ---
+mRNA_miRNA <- read.csv("mi_mRNA.csv", header = TRUE)
+lncRNA_miRNA <- read.csv("lnc_mi.csv", header = TRUE)
+circRNA_miRNA <- read.csv("circ_mi.csv", header = TRUE)
+
+# --- IDENTIFY COMMON miRNA ---
+common_miRNA_lnc <- intersect(mRNA_miRNA$from, lncRNA_miRNA$to)
+common_miRNA_circ <- intersect(mRNA_miRNA$from, circRNA_miRNA$to)
+common_miRNA <- union(common_miRNA_lnc, common_miRNA_circ)
+
+# --- FILTER DATA BASED ON COMMON miRNA & REMOVE NA ---
+filtered_mRNA_miRNA <- na.omit(mRNA_miRNA[mRNA_miRNA$from %in% common_miRNA,])
+filtered_lncRNA_miRNA <- na.omit(lncRNA_miRNA[lncRNA_miRNA$to %in% common_miRNA_lnc,])
+filtered_circRNA_miRNA <- na.omit(circRNA_miRNA[circRNA_miRNA$to %in% common_miRNA_circ,])
+
+# Assign type for each data
+filtered_mRNA_miRNA$type <- "Prediction"
+filtered_lncRNA_miRNA$type <- "Prediction"
+filtered_circRNA_miRNA$type <- "Prediction"
+
+# Combine edges
+edges <- rbind(filtered_mRNA_miRNA, filtered_lncRNA_miRNA, filtered_circRNA_miRNA)
+
+# --- CREATE NODE DATA ---
+mRNA_nodes <- data.frame(Node = unique(filtered_mRNA_miRNA$to), Type = "mRNA")
+lncRNA_nodes <- data.frame(Node = unique(filtered_lncRNA_miRNA$from), Type = "lncRNA")
+circRNA_nodes <- data.frame(Node = unique(filtered_circRNA_miRNA$from), Type = "circRNA")
+miRNA_nodes <- data.frame(Node = unique(common_miRNA), Type = "miRNA")
+nodes <- rbind(mRNA_nodes, lncRNA_nodes, circRNA_nodes, miRNA_nodes)
+
+# --- PROCESS CO-EXPRESSION DATA ---
+lnc_coexp_data <- na.omit(read.csv("lnc_mRNA_co-exp.csv", header = TRUE))
+circ_coexp_data <- na.omit(read.csv("circ_mRNA_co-exp.csv", header = TRUE))
+
+filtered_lnc_coexp_data <- lnc_coexp_data[lnc_coexp_data$from %in% unique(filtered_lncRNA_miRNA$from) | 
+                                          lnc_coexp_data$to %in% unique(filtered_mRNA_miRNA$to),]
+
+filtered_circ_coexp_data <- circ_coexp_data[circ_coexp_data$from %in% unique(filtered_circRNA_miRNA$from) | 
+                                            circ_coexp_data$to %in% unique(filtered_mRNA_miRNA$to),]
+
+filtered_lnc_coexp_data$type <- "Co-expression"
+filtered_circ_coexp_data$type <- "Co-expression"
+edges <- rbind(edges, filtered_lnc_coexp_data, filtered_circ_coexp_data)
+
+# Save edges to CSV
+write.csv(edges, "edges.csv", row.names = FALSE, quote = FALSE)
+
+# --- UPDATE NODES DATA FOR CO-EXPRESSION ---
+coexp_nodes_from_lnc <- data.frame(Node = unique(filtered_lnc_coexp_data$from), Type = "lncRNA")
+coexp_nodes_from_circ <- data.frame(Node = unique(filtered_circ_coexp_data$from), Type = "circRNA")
+coexp_nodes_to <- data.frame(Node = unique(c(filtered_lnc_coexp_data$to, filtered_circ_coexp_data$to)), Type = "mRNA")
+nodes <- unique(rbind(nodes, coexp_nodes_from_lnc, coexp_nodes_from_circ, coexp_nodes_to))
+
+# Save nodes to CSV
+write.csv(nodes, "nodes.csv", row.names = FALSE, quote = FALSE)
