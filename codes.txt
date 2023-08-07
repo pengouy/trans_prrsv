@@ -1,0 +1,292 @@
+# ***1*** Prediction with miRanda
+# Setting Up Environment
+# ======================
+# Create and activate a new conda environment named 'miranda'
+conda create -n miranda
+conda activate miranda
+
+# Install required packages
+conda install perl
+conda install -c bioconda bedtools
+
+# Data Retrieval and Preprocessing
+# ================================
+# Note: It's mentioned that files were downloaded from Ensembl using FileZilla. 
+# This is a manual step and won't be shown in the automated code.
+
+# Extract 3' UTRs from the genomic annotation
+awk '$3=="three_prime_UTR"' GCF_000003025.6_Sscrofa11.1_genomic.gff > ssc_UTRs.gff
+
+# Convert UTRs to FASTA format
+bedtools getfasta -fi Sus_scrofa.Sscrofa11.1.dna.toplevel.fa -bed ssc_UTRs.gff3 -s -tab | \
+paste <(cut -f 9 ssc_UTRs.gff3|sed 's/Parent=transcript://g' ) - | \
+awk 'length($3)>10' | cut -f 1,3 | sed 's/\t/#/1' | sed 's/^/>/g' | tr "#" "\n" > ssc_NamedUTRs.fasta
+
+# Splitting miRNA fasta files based on differential expression
+# A couple of approaches are provided, choose one.
+# Approach 1:
+awk '/^>/{s=++num}{print > "mature_ssc_"s".fa"}' mature_ssc.fa
+# Approach 2:
+grep -A 1 'ssc-miR' mature.fa > ssc_mature.fa
+# Extract specific miRNAs, e.g., ssc-miR-24
+grep -A 1 'ssc-miR-24' mature_ssc.fa > ssc-miR-24.fa
+
+# miRanda Prediction
+# ==================
+# Create and run a script to use miRanda for prediction
+for f in mature_ssc_*.fa; do 
+    echo "miranda "$f" ssc_NamedUTRs.fasta > "${f%.*}".out &"; 
+done > runMiranda.sh
+sh runMiranda.sh &
+
+# Post-processing
+# ===============
+# Collate and filter miRanda output
+cat *out | grep ">>" | sort -k5,5nr | awk 'NR<50000' | sed 's/>>//g' | \
+cat <(echo "Seq1,Seq2,Tot Score,Tot Energy,Max Score,Max Energy,Strand,Len1,Len2,Positions" | tr "," "\t") - > MirandaOutput.tab
+
+# miRanda Prediction for circRNA and lncRNA
+# (The code is structured similarly to the one for miRNA)
+# Note: Given the similarity, consider making this a function or loop for efficiency.
+
+### For circRNA
+# --------------
+miranda circ_3dpi.txt miRNA_ssc.fa > 3dpi.out
+miranda circ_7dpi.txt miRNA_ssc.fa > 7dpi.out
+miranda circ_21dpi.txt miRNA_ssc.fa > 21dpi.out
+
+cat 3dpi.out | grep ">>" | sort -k5,5nr | awk 'NR<50000' | sed 's/>>//g' | \
+cat <(echo "Seq1,Seq2,Tot Score,Tot Energy,Max Score,Max Energy,Strand,Len1,Len2,Positions" | tr "," "\t") - > 3_mir_ci_mi.csv
+
+# Similar processes are done for 7dpi and 21dpi, and can be looped for efficiency.
+
+### For lncRNA
+# -------------
+# Run miRanda for differentially expressed miRNAs and lncRNA
+
+miranda 3dpi_DEmiRNA.fa circRNA_sus.txt > 3dpi_lnc.out
+miranda 7dpi_DEmiRNA.fa circRNA_sus.txt > 7dpi_lnc.out
+miranda 21dpi_DEmiRNA.fa circRNA_sus.txt > 21dpi_lnc.out
+
+# Process the miRanda output for lncRNA
+cat 3dpi_lnc.out | grep ">>" | sort -k5,5nr | awk 'NR<50000' | sed 's/>>//g' | \
+cat <(echo "Seq1,Seq2,Tot Score,Tot Energy,Max Score,Max Energy,Strand,Len1,Len2,Positions" | tr "," "\t") - > 3dpi_lnc.csv
+
+cat 7dpi_lnc.out | grep ">>" | sort -k5,5nr | awk 'NR<50000' | sed 's/>>//g' | \
+cat <(echo "Seq1,Seq2,Tot Score,Tot Energy,Max Score,Max Energy,Strand,Len1,Len2,Positions" | tr "," "\t") - > 7dpi_lnc.csv
+
+cat 21dpi_lnc.out | grep ">>" | sort -k5,5nr | awk 'NR<50000' | sed 's/>>//g' | \
+cat <(echo "Seq1,Seq2,Tot Score,Tot Energy,Max Score,Max Energy,Strand,Len1,Len2,Positions" | tr "," "\t") - > 21dpi_lnc.csv
+
+
+# ***2*** Prediction with RNAhybrid
+# -------------------------------------
+# The following steps detail how to install and utilize RNAhybrid for miRNA target prediction in different RNA classes.
+
+# 1. Install RNAhybrid
+# --------------------
+
+# Create a new conda environment and activate it
+conda create -n RNAhybrid
+conda activate RNAhybrid
+
+# Install RNAhybrid package
+conda install -c genomedk rnahybrid
+
+# Check if installation was successful
+conda list
+
+# Deactivate the environment after installation
+conda deactivate
+
+# 2. Run RNAhybrid
+# ----------------
+
+# Example command for miRNA target prediction:
+RNAhybrid -b 1 -e -20 -u 1 -v 1 -s 3utr_sus_scrofa -t ssc_NamedUTRs.fasta -q ssc-miR-133a-3p.fa > ssc-miR-133a-3p.txt
+
+# Note: Use batch processing tools like Excel or shell scripting to automate running multiple miRNAs.
+
+# 3. Process Results
+# ------------------
+
+# Extract information from RNAhybrid output
+python post_ssc.py ssc-miR-99b.txt ssc-miR-99b.csv
+
+# Aggregate and deduplicate results
+cat *.csv | sort | uniq -c > RNAhybrid_7dpi_.tab
+
+# lncRNA
+# ------
+
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH -n 16
+
+RNAhybrid -b 1 -e -20 -u 1 -v 1 -s 3utr_sus_scrofa -t ssc_NamedUTRs.fasta -q yu_3dpi_miRNA.txt > 3dpi_lnc.txt
+RNAhybrid -b 1 -e -20 -u 1 -v 1 -s 3utr_sus_scrofa -t ssc_NamedUTRs.fasta -q yu_7dpi_miRNA.txt > 7dpi_lnc.txt
+RNAhybrid -b 1 -e -20 -u 1 -v 1 -s 3utr_sus_scrofa -t ssc_NamedUTRs.fasta -q yu_21dpi_miRNA.txt > 21dpi_lnc.txt
+
+python post_ssc.py 3dpi_lnc.txt hybrid_3dpi_lnc.csv
+python post_ssc.py 7dpi_lnc.txt hybrid_7dpi_lnc.csv
+python post_ssc.py 21dpi_lnc.txt hybrid_21dpi_lnc.csv
+
+# circRNA
+# -------
+
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH -n 16
+
+RNAhybrid -b 1 -e -20 -u 1 -v 1 -s 3utr_sus_scrofa -t circ_7dpi.txt -q miRNA_ssc.fa > 3dpi_circ.txt
+
+python post_ssc.py 3dpi_circ.txt hybrid_3dpi_circ.csv
+python post_ssc.py 7dpi_circ.txt hybrid_7dpi_circ.csv
+python post_ssc.py 21dpi_circ.txt hybrid_21dpi_circ.csv
+
+
+# post_ssc.py
+# -------
+import sys
+import pandas as pd
+
+filename = sys.argv[1]
+with open(filename) as f:
+	data = f.readlines()
+f.close()
+miRNA = []
+target = []
+mfe = []
+pvalue = []
+position = []
+
+for step in data:
+	line = step.split(": ")
+	if line[0] == "target":
+		target.append(line[1].strip('\n'))
+	elif line[0] == "miRNA ":
+		miRNA.append(line[1].strip('\n'))
+	elif line[0] == "mfe":
+		mfe.append(line[1].strip('\n'))
+	elif line[0] == "p-value":
+		pvalue.append(line[1].strip('\n'))
+	line_position = step.split("  ")
+	if line_position[0] == "position":
+		position.append(line_position[1].strip('\n'))
+lendata = len(target)
+
+outfile = sys.argv[2]
+dataframe = pd.DataFrame({'miRNA':miRNA, 'target':target, 'mfe':mfe, 'p-value':pvalue, 'position':position})
+dataframe.to_csv(outfile, index=False, sep=',')
+
+
+
+# ***3*** Prediction with RNAhybrid
+# ------------------
+
+# 1. combine the DEmiRNA.fa
+cat *.fa > 3dpi_DEmiRNA.fa
+
+# 2. prepare the input file of miRNA
+with open('3dpi_DEmiRNA.fa') as f:
+     for line in f:
+         line = line.strip() 
+         if len(line) == 0: 
+             continue
+         line = line.replace('\n','').replace('>','\n>')
+         if line.startswith('\n>'):
+             line = line.replace('>','')+'\t'
+         else:
+             line = line[1:8]+'\t'+'9823'
+         with open('3dpitarget.txt','a') as r:
+              r.writelines(line)
+
+# 3. prepare the input file of mRNA
+with open('ssc_NamedUTRs.fasta') as f:
+     for line in f:
+         line =line.strip()
+         if len(line) == 0:
+            continue
+         line = line.replace('\n','').replace('>','\n>')
+         if line.startswith('\n>'):
+             line = line.replace('>','')+'\t'+'9823'+'\t'
+         with open ('mRNA_Targetscan','a') as r:
+             r.writelines(line)
+
+# 4. run with Targetscan
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH -n 16
+
+targetscan_70.pl 3dpitarget.txt mRNA_Targetscan.txt targetscan_3dpi.txt
+
+
+#######################################################################################
+# Codes for plotting in R
+library(ggplot2)
+
+#### Part 1: GO term Biological process ####
+
+# Set working directory for GO term Biological process
+setwd("YOUR_PATH_HERE_GO_TERM")
+
+# Load GO term Biological process data
+go_dt <- read.csv("mRNA_TargetGene_GOBP02.csv", header=TRUE)
+
+# Set levels for Groups factor
+go_dt$Groups <- factor(go_dt$Groups, levels=c("3dpi", "7dpi", "21dpi"))
+
+# Plotting GO term Biological process data
+ggplot(go_dt, aes(Groups, KEGG_Pathways)) +
+  geom_point(aes(size=GeneNum, color=Qvalue)) +
+  theme_bw() +
+  scale_color_gradient(low="#66FF33", high="#CC3300") +
+  scale_size_continuous(range=c(1.5, 6)) +
+  labs(x="Groups", y="GO-BP Terms") +
+  theme(axis.text = element_text(color="black"),
+        axis.title = element_text(face="bold"),
+        legend.title = element_text(face="bold"),
+        plot.margin = unit(rep(0.5, 4), "cm")) +
+  scale_x_discrete(labels = c('3dpi', '7dpi', '21dpi'))
+
+#### Part 2: KEGG Pathways ####
+
+# Set working directory for KEGG
+setwd("YOUR_PATH_HERE_KEGG")
+
+# Load KEGG data
+kegg_dt <- read.csv("miRNA_TargetGene_KEGG.csv", header=TRUE)
+
+# Set levels for Groups factor
+kegg_dt$Groups <- factor(kegg_dt$Groups, levels=c("3dpi", "7dpi", "21dpi"))
+
+# Plotting KEGG data
+ggplot(kegg_dt, aes(Groups, KEGG_Pathways)) +
+  geom_point(aes(size=GeneNum, color=Qvalue)) +
+  theme_bw() +
+  scale_color_gradient(low="#FF3333", high="#0000CC") +
+  scale_size_continuous(range=c(1.5, 6)) +
+  labs(x="Groups", y="KEGG Pathways") +
+  theme(axis.text = element_text(color="black"),
+        axis.title = element_text(face="bold"),
+        legend.title = element_text(face="bold"),
+        plot.margin = unit(rep(0.5, 4), "cm")) +
+  scale_x_discrete(labels = c('3dpi', '7dpi', '21dpi'))
+
+#### Part 3: Volcano Plot ####
+
+# Set working directory for Volcano plot
+setwd("YOUR_PATH_HERE_VOLCANO")
+
+# Load Volcano plot data
+volcano_dt <- read.csv("21dpi.csv", header=TRUE, na.strings="#N/A")
+
+# Plotting Volcano plot data
+ggplot(volcano_dt, aes(x=Log2FC, y=-log10(Pvalue), colour=Trend)) +
+  geom_point(alpha=0.75, size=3.5, shape=16) +
+  scale_color_manual(values=c("#4393C3", "#d2dae2", "#D6604D")) +
+  xlim(-10, 10) + ylim(-1, 320) +
+  geom_vline(xintercept=c(-1, 1), lty=2, col="black", lwd=0.3) +
+  geom_hline(yintercept=-log10(0.05), lty=2, col="black", lwd=0.3) +
+  theme_bw() +
+  labs(x="Log2(FoldChange)", y="-Log10(Qvalue)")
